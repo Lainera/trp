@@ -1,5 +1,5 @@
-use std::thread;
 use crate::message::Message;
+use std::thread;
 
 const RESULT_CHAN_SIZE: usize = 100;
 
@@ -7,18 +7,22 @@ const RESULT_CHAN_SIZE: usize = 100;
 mod parser {
     const PARSER_CHAN_SIZE: usize = 100;
 
-    use std::path::Path;
     use serde::Deserialize;
+    use std::path::Path;
     use tokio::sync::mpsc::Receiver;
 
     use crate::Message;
-
 
     impl TryFrom<&Record> for Message {
         type Error = anyhow::Error;
 
         fn try_from(record: &Record) -> Result<Self, Self::Error> {
-            let Record { kind, client, tx, amount } = record;
+            let Record {
+                kind,
+                client,
+                tx,
+                amount,
+            } = record;
             let client = *client;
             let tx = *tx;
             let amount = *amount;
@@ -43,18 +47,15 @@ mod parser {
         amount: Option<f32>,
     }
 
-
-    /// Spawns separate thread for reading csv. 
-    /// Simpler design would be to `read -> parse -> handle transaction` in a single loop, 
+    /// Spawns separate thread for reading csv.
+    /// Simpler design would be to `read -> parse -> handle transaction` in a single loop,
     /// chosen approach scales better for concurrent handling of parsed transactions, as well as
     /// bigger data sets (i.e. transaction history does not have to be stored in one place).
-    pub fn start<P>(input: P) -> Result<Receiver<Message>, anyhow::Error> 
-        where
-            P: AsRef<Path>,
+    pub fn start<P>(input: P) -> Result<Receiver<Message>, anyhow::Error>
+    where
+        P: AsRef<Path>,
     {
-
-        let mut rdr = csv::ReaderBuilder::new()
-            .from_path(input)?;
+        let mut rdr = csv::ReaderBuilder::new().from_path(input)?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(PARSER_CHAN_SIZE);
 
@@ -84,39 +85,39 @@ mod message {
     #[derive(Debug)]
     /// [Internally-tagged enums] [can't] be deserialized by csv crate, which is why records are
     /// read as structs, followed by conversion into valid enum. Message encapsulates message
-    /// validation logic. 
+    /// validation logic.
     /// [internally-tagged enums]: https://serde.rs/enum-representations.html#internally-tagged
     /// [can't]: https://github.com/BurntSushi/rust-csv/issues/211
     pub enum Message {
         Deposit { client: u16, tx: u32, amount: f32 },
         Withdraw { client: u16, tx: u32, amount: f32 },
-        Dispute {client: u16, tx: u32 },
-        Resolve {client: u16, tx: u32 },
-        Chargeback {client: u16, tx: u32 },
+        Dispute { client: u16, tx: u32 },
+        Resolve { client: u16, tx: u32 },
+        Chargeback { client: u16, tx: u32 },
     }
 
     impl Message {
         pub fn client_id(&self) -> u16 {
             match self {
-                Message::Deposit { client, ..} => *client,
-                Message::Withdraw { client, ..} => *client,
-                Message::Dispute { client, ..} => *client,
-                Message::Resolve { client, ..} => *client,
-                Message::Chargeback { client, ..} => *client,
+                Message::Deposit { client, .. } => *client,
+                Message::Withdraw { client, .. } => *client,
+                Message::Dispute { client, .. } => *client,
+                Message::Resolve { client, .. } => *client,
+                Message::Chargeback { client, .. } => *client,
             }
         }
 
         #[allow(dead_code)]
         pub fn transaction_id(&self) -> u32 {
             match self {
-                Message::Deposit { tx, ..} => *tx,
-                Message::Withdraw { tx, ..} => *tx,
+                Message::Deposit { tx, .. } => *tx,
+                Message::Withdraw { tx, .. } => *tx,
                 Message::Dispute { tx, .. } => *tx,
                 Message::Resolve { tx, .. } => *tx,
                 Message::Chargeback { tx, .. } => *tx,
             }
         }
-    
+
         /// Returns `true` if the message is [`Deposit`].
         ///
         /// [`Deposit`]: Message::Deposit
@@ -131,16 +132,16 @@ mod message {
 mod processor {
     const ACCOUNT_CHAN_SIZE: usize = 100;
 
-    use std::{collections::HashMap, fmt::Display};
-    use serde::Serialize;
-    use tokio::sync::mpsc::{self, Receiver, Sender};
     use crate::Message;
+    use serde::Serialize;
+    use std::{collections::HashMap, fmt::Display};
+    use tokio::sync::mpsc::{self, Receiver, Sender};
 
     /// Given message is for client who does not have an account yet,
     /// When message is Withdraw - then op would fail, since account balance is 0
     /// When message is Dispute/Resolve/Chargeback - then op would fail since there is
     /// no previous deposit to dispute/resolve/chargeback.
-    /// When message is Deposit - then op would succeed. 
+    /// When message is Deposit - then op would succeed.
     pub fn should_create_account(msg: &Message) -> bool {
         msg.is_deposit()
     }
@@ -153,18 +154,18 @@ mod processor {
             if clients.get(&client_id).is_none() {
                 if !should_create_account(&msg) {
                     eprintln!("Got out of order message: {msg:?}, ignoring");
-                    continue
+                    continue;
                 }
 
                 let account = Account::new(client_id);
                 match account.start(done_tx.clone()) {
                     Ok(client_tx) => {
                         clients.insert(client_id, client_tx);
-                    },
+                    }
                     Err(err) => {
                         eprintln!("Failed to spawn task for account({client_id}) : {err}");
                         continue;
-                    },
+                    }
                 };
             }
 
@@ -194,20 +195,30 @@ mod processor {
 
     impl Account<Ready> {
         pub fn new(client: u16) -> Self {
-            Account { 
-                client, 
-                available: 0.0, 
-                held: 0.0, 
-                total: 0.0, 
+            Account {
+                client,
+                available: 0.0,
+                held: 0.0,
+                total: 0.0,
                 locked: false,
                 _state: Ready,
             }
         }
 
-        fn start(self, done: mpsc::Sender<Account<Running>>) -> Result<mpsc::Sender<Message>, anyhow::Error> {
+        fn start(
+            self,
+            done: mpsc::Sender<Account<Running>>,
+        ) -> Result<mpsc::Sender<Message>, anyhow::Error> {
             let (tx, mut rx) = mpsc::channel(ACCOUNT_CHAN_SIZE);
             let mut history: TXHistory = HashMap::new();
-            let Self { client, available, held, total, locked, _state } = self;
+            let Self {
+                client,
+                available,
+                held,
+                total,
+                locked,
+                _state,
+            } = self;
             let mut account = Account {
                 client,
                 available,
@@ -219,18 +230,20 @@ mod processor {
 
             tokio::spawn(async move {
                 while let Some(msg) = rx.recv().await {
-                    account.apply(&msg, &mut history)
+                    account
+                        .apply(&msg, &mut history)
                         .unwrap_or_else(|err| eprintln!("Failed to apply message {msg:?}: {err}"));
                 }
 
-                done.send(account).await
+                done.send(account)
+                    .await
                     .unwrap_or_else(|err| eprintln!("Failed to send results: {err}"));
             });
 
             Ok(tx)
         }
     }
-    
+
     enum Transaction<T = f32> {
         Deposited(T),
         Disputed(T),
@@ -245,7 +258,7 @@ mod processor {
         fn is_deposited(&self) -> bool {
             matches!(self, Self::Deposited(..))
         }
-    
+
         /// Returns `true` if the transaction is [`Disputed`].
         ///
         /// [`Disputed`]: Transaction::Disputed
@@ -285,63 +298,73 @@ mod processor {
     impl std::error::Error for ProcessingError {}
 
     impl Account<Running> {
-        fn apply(&mut self, message: &Message, tx_history: &mut TXHistory) -> Result<(), ProcessingError> {
+        fn apply(
+            &mut self,
+            message: &Message,
+            tx_history: &mut TXHistory,
+        ) -> Result<(), ProcessingError> {
             if self.locked {
-                return Err(ProcessingError::AccountLocked)
+                return Err(ProcessingError::AccountLocked);
             }
             match message {
                 Message::Deposit { tx, amount, .. } => {
                     self.available += amount;
                     self.total += amount;
                     tx_history.insert(*tx, Transaction::Deposited(*amount));
-                },
-                Message::Withdraw {amount, .. } => {
+                }
+                Message::Withdraw { amount, .. } => {
                     if self.available < *amount {
                         return Err(ProcessingError::InsufficientFunds);
                     }
                     self.available -= amount;
                     self.total -= amount;
-                },
+                }
                 Message::Dispute { tx, .. } => {
-                    if let Some(existing) = tx_history.get_mut(tx)
+                    if let Some(existing) = tx_history
+                        .get_mut(tx)
                         .filter(|existing| existing.is_deposited())
-                        .filter(|existing| self.available >= existing.amount()) {
-                            let amount = existing.amount();
-                            self.available -= amount;
-                            self.held += amount;
-                            *existing = Transaction::Disputed(amount);
-                        }
-                },
+                        .filter(|existing| self.available >= existing.amount())
+                    {
+                        let amount = existing.amount();
+                        self.available -= amount;
+                        self.held += amount;
+                        *existing = Transaction::Disputed(amount);
+                    }
+                }
                 Message::Resolve { tx, .. } => {
-                    if let Some(existing) = tx_history.get_mut(tx)
-                        .filter(|existing| existing.is_disputed()) {
-                            let amount = existing.amount();
-                            self.available += amount;
-                            self.held -= amount;
-                            *existing = Transaction::Deposited(amount);
-                        }
-                },
+                    if let Some(existing) = tx_history
+                        .get_mut(tx)
+                        .filter(|existing| existing.is_disputed())
+                    {
+                        let amount = existing.amount();
+                        self.available += amount;
+                        self.held -= amount;
+                        *existing = Transaction::Deposited(amount);
+                    }
+                }
                 Message::Chargeback { tx, .. } => {
-                    if let Some(existing) = tx_history.get_mut(tx)
-                        .filter(|existing| existing.is_disputed()) {
-                            let amount = existing.amount();
-                            self.held -= amount;
-                            self.total -= amount;
-                            self.locked = true;
-                            *existing = Transaction::Reversed(amount);
-                        }
-                },
+                    if let Some(existing) = tx_history
+                        .get_mut(tx)
+                        .filter(|existing| existing.is_disputed())
+                    {
+                        let amount = existing.amount();
+                        self.held -= amount;
+                        self.total -= amount;
+                        self.locked = true;
+                        *existing = Transaction::Reversed(amount);
+                    }
+                }
             }
 
             Ok(())
-        } 
+        }
     }
 
     #[cfg(test)]
     mod tests {
-        use std::collections::HashMap;
-        use crate::{message::Message, processor::ProcessingError};
         use super::{Account, Running, Transaction};
+        use crate::{message::Message, processor::ProcessingError};
+        use std::collections::HashMap;
 
         fn running(id: u16) -> Account<Running> {
             Account {
@@ -353,7 +376,7 @@ mod processor {
                 _state: Running,
             }
         }
-        
+
         #[test]
         fn valid_deposit_is_handled() {
             let mut account = running(42);
@@ -388,7 +411,11 @@ mod processor {
                 client,
             };
 
-            let withdrawal = Message::Withdraw { client, tx: 144, amount: 3.0 };
+            let withdrawal = Message::Withdraw {
+                client,
+                tx: 144,
+                amount: 3.0,
+            };
 
             assert!(account.apply(&deposit, &mut history).is_ok());
             assert!(account.apply(&withdrawal, &mut history).is_ok());
@@ -397,8 +424,8 @@ mod processor {
             assert_eq!(account.held, 0.0);
             assert_eq!(account.total, 7.0);
             assert!(!account.locked);
-        } 
-        
+        }
+
         #[test]
         fn invalid_withdrawal_is_handled() {
             let client = 42;
@@ -410,7 +437,11 @@ mod processor {
                 client,
             };
 
-            let withdrawal = Message::Withdraw { client, tx: 144, amount: 3.0 };
+            let withdrawal = Message::Withdraw {
+                client,
+                tx: 144,
+                amount: 3.0,
+            };
 
             assert!(account.apply(&deposit, &mut history).is_ok());
 
@@ -422,7 +453,7 @@ mod processor {
             assert_eq!(account.held, 0.0);
             assert_eq!(account.total, 1.0);
             assert!(!account.locked);
-        } 
+        }
 
         #[test]
         fn valid_dispute_is_handled() {
@@ -448,8 +479,8 @@ mod processor {
             assert!(saved.is_some());
             let saved = saved.unwrap();
             assert!(matches!(saved, Transaction::Disputed(_)));
-        } 
-        
+        }
+
         #[test]
         fn invalid_dispute_is_handled() {
             let client = 42;
@@ -470,7 +501,7 @@ mod processor {
             assert_eq!(account.total, 1.0);
             assert_eq!(account.available, 1.0);
             assert!(!account.locked);
-        } 
+        }
 
         #[test]
         fn valid_resolve_is_handled() {
@@ -499,18 +530,17 @@ mod processor {
             assert!(matches!(saved, Transaction::Disputed(_)));
 
             let resolve = Message::Resolve { client, tx };
-            assert!(account.apply(&resolve, &mut  history).is_ok());
+            assert!(account.apply(&resolve, &mut history).is_ok());
             assert_eq!(account.held, 0.0);
             assert_eq!(account.total, 1.0);
             assert_eq!(account.available, 1.0);
             assert!(!account.locked);
-            
+
             let saved = history.get(&tx);
             assert!(saved.is_some());
             let saved = saved.unwrap();
             assert!(matches!(saved, Transaction::Deposited(_)));
-        } 
-        
+        }
 
         #[test]
         fn invalid_resolve_is_handled() {
@@ -527,18 +557,18 @@ mod processor {
             assert!(account.apply(&deposit, &mut history).is_ok());
 
             let resolve = Message::Resolve { client, tx };
-            assert!(account.apply(&resolve, &mut  history).is_ok());
+            assert!(account.apply(&resolve, &mut history).is_ok());
             assert_eq!(account.held, 0.0);
             assert_eq!(account.total, 1.0);
             assert_eq!(account.available, 1.0);
             assert!(!account.locked);
-            
+
             let saved = history.get(&tx);
             assert!(saved.is_some());
             let saved = saved.unwrap();
             assert!(matches!(saved, Transaction::Deposited(_)));
         }
-        
+
         #[test]
         fn valid_chargeback_is_handled() {
             let client = 42;
@@ -566,18 +596,17 @@ mod processor {
             assert!(matches!(saved, Transaction::Disputed(_)));
 
             let chargeback = Message::Chargeback { client, tx };
-            assert!(account.apply(&chargeback, &mut  history).is_ok());
+            assert!(account.apply(&chargeback, &mut history).is_ok());
             assert_eq!(account.held, 0.0);
             assert_eq!(account.total, 0.0);
             assert_eq!(account.available, 0.0);
             assert!(account.locked);
-            
+
             let saved = history.get(&tx);
             assert!(saved.is_some());
             let saved = saved.unwrap();
             assert!(matches!(saved, Transaction::Reversed(_)));
-        } 
-        
+        }
 
         #[test]
         fn invalid_chargeback_is_handled() {
@@ -594,19 +623,17 @@ mod processor {
             assert!(account.apply(&deposit, &mut history).is_ok());
 
             let resolve = Message::Chargeback { client, tx };
-            assert!(account.apply(&resolve, &mut  history).is_ok());
+            assert!(account.apply(&resolve, &mut history).is_ok());
             assert_eq!(account.held, 0.0);
             assert_eq!(account.total, 1.0);
             assert_eq!(account.available, 1.0);
             assert!(!account.locked);
-            
+
             let saved = history.get(&tx);
             assert!(saved.is_some());
             let saved = saved.unwrap();
             assert!(matches!(saved, Transaction::Deposited(_)));
         }
-
-
     }
 }
 
@@ -618,10 +645,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rx = parser::start(fname)?;
     let (done_tx, mut done_rx) = tokio::sync::mpsc::channel(RESULT_CHAN_SIZE);
 
-
     let writer_handle = thread::spawn(move || {
         let mut out = csv::Writer::from_writer(std::io::stdout());
-        
+
         while let Some(account) = done_rx.blocking_recv() {
             out.serialize(account)?;
         }
@@ -634,9 +660,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         processor::start(rx, done_tx).await;
     });
 
-    writer_handle.join()
+    writer_handle
+        .join()
         .map_err(|err| anyhow::anyhow!("Writer panic: {err:?}"))??;
 
     Ok(())
 }
-
